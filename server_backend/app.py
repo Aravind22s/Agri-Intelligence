@@ -12,12 +12,8 @@ import os
 import requests
 from io import BytesIO
 from PIL import Image
-from torchvision import models, transforms
-import torch
-import torch.nn as nn
 from google import genai
-from transformers import AutoImageProcessor, AutoModelForImageClassification
-from huggingface_hub import login
+import base64
 from dotenv import load_dotenv
 import warnings
 import json
@@ -342,64 +338,51 @@ def predict_commodity(commodity):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# Plant Disease Detection Setup
-# ⚠️  Do NOT load the model at import / startup time.
-# PyTorch + HuggingFace together require ~1.5 GB RAM.
-# Render free tier only provides 512 MB — loading globally kills the
-# gunicorn worker before the first request is ever served.
-# The model is loaded lazily on the first /api/detect_disease request.
+# Plant Disease Detection — via HuggingFace FREE Inference API
+# No torch, no transformers, no local model loading.
+# RAM cost: ~0 MB  (was ~1.5 GB with local torch+transformers)
 
-MODEL_NAME = "linkanjarad/mobilenet_v2_1.0_224-plant-disease-identification"
-BASE_PROCESSOR = "google/mobilenet_v2_1.0_224"
-
-MODEL_CACHE_DIR = os.getenv("MODEL_CACHE_DIR", "/app/model_cache")
-os.makedirs(MODEL_CACHE_DIR, exist_ok=True)
-os.environ["TRANSFORMERS_CACHE"] = MODEL_CACHE_DIR
-os.environ["HF_HOME"] = MODEL_CACHE_DIR
-
-processor = None
-disease_model = None
-_disease_model_loaded = False
-
-def load_disease_model():
-    """Lazy loader — called on first /api/detect_disease request only."""
-    global processor, disease_model, _disease_model_loaded
-    if _disease_model_loaded:
-        return
-    _disease_model_loaded = True
-    try:
-        hf_token = os.getenv("HF_TOKEN")
-        if hf_token:
-            login(hf_token)
-
-        processor = AutoImageProcessor.from_pretrained(
-            BASE_PROCESSOR,
-            use_fast=True,
-            cache_dir=MODEL_CACHE_DIR,
-        )
-
-        disease_model = AutoModelForImageClassification.from_pretrained(
-            MODEL_NAME,
-            cache_dir=MODEL_CACHE_DIR,
-        )
-
-        disease_model.eval()
-        print("✅ Plant Disease Model Loaded Successfully")
-
-    except Exception as e:
-        print(f"❌ Disease Model Load Error: {e}")
+HF_MODEL_ID = "linkanjarad/mobilenet_v2_1.0_224-plant-disease-identification"
+HF_INFERENCE_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}"
 
 def predict_disease(image_bytes):
-    if processor is None or disease_model is None:
-        return "Model not loaded", 0.0
-    image = Image.open(BytesIO(image_bytes)).convert("RGB")
-    inputs = processor(images=image, return_tensors="pt")
-    with torch.no_grad():
-        outputs = disease_model(**inputs)
-        scores = torch.softmax(outputs.logits, dim=-1)[0]
-    confidence, idx = scores.max(0)
-    label = disease_model.config.id2label[idx.item()]
-    return label, float(confidence.item())
+    hf_token = os.getenv("HF_TOKEN")
+    headers = {}
+    if hf_token:
+        headers["Authorization"] = f"Bearer {hf_token}"
+
+    try:
+        response = requests.post(
+            HF_INFERENCE_URL,
+            headers=headers,
+            data=image_bytes,
+            timeout=30,
+        )
+
+        if response.status_code == 503:
+            import time
+            time.sleep(10)
+            response = requests.post(
+                HF_INFERENCE_URL,
+                headers=headers,
+                data=image_bytes,
+                timeout=30,
+            )
+
+        if response.status_code != 200:
+            print(f"HF API error: {response.status_code} {response.text}")
+            return None, 0.0
+
+        results = response.json()
+        if not results or not isinstance(results, list):
+            return None, 0.0
+
+        top = results[0]
+        return top["label"], float(top["score"])
+
+    except Exception as e:
+        print(f"❌ HF Inference API error: {e}")
+        return None, 0.0
 
 def generate_disease_awareness(disease_label, confidence):
     try:
