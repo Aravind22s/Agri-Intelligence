@@ -429,11 +429,6 @@ STRICT: Keep every bullet under 30 words. Be direct.
 
 @app.route('/api/detect_disease', methods=['POST'])
 def detect_disease():
-    # Lazy-load the model on first call (avoids startup OOM on Render free tier)
-    load_disease_model()
-
-    if not disease_model:
-        return jsonify({"error": "Disease model not loaded"}), 500
 
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
