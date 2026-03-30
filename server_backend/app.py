@@ -343,8 +343,7 @@ def predict_commodity(commodity):
 # RAM cost: ~0 MB  (was ~1.5 GB with local torch+transformers)
 
 HF_MODEL_ID = "linkanjarad/mobilenet_v2_1.0_224-plant-disease-identification"
-HF_INFERENCE_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL_ID}"
-
+HF_INFERENCE_URL = f"https://router.huggingface.co/models/{HF_MODEL_ID}"
 def predict_disease(image_bytes):
     hf_token = os.getenv("HF_TOKEN")
     headers = {}
