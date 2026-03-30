@@ -14,6 +14,7 @@ from io import BytesIO
 from PIL import Image
 from google import genai
 import base64
+from huggingface_hub import InferenceClient
 from dotenv import load_dotenv
 import warnings
 import json
@@ -343,41 +344,20 @@ def predict_commodity(commodity):
 # RAM cost: ~0 MB  (was ~1.5 GB with local torch+transformers)
 
 HF_MODEL_ID = "linkanjarad/mobilenet_v2_1.0_224-plant-disease-identification"
-HF_INFERENCE_URL = f"https://router.huggingface.co/models/{HF_MODEL_ID}"
+
 def predict_disease(image_bytes):
-    hf_token = os.getenv("HF_TOKEN")
-    headers = {}
-    if hf_token:
-        headers["Authorization"] = f"Bearer {hf_token}"
-
     try:
-        response = requests.post(
-            HF_INFERENCE_URL,
-            headers=headers,
-            data=image_bytes,
-            timeout=30,
+        hf_token = os.getenv("HF_TOKEN")
+        client = InferenceClient(
+            provider="hf-inference",
+            api_key=hf_token,
         )
-
-        if response.status_code == 503:
-            import time
-            time.sleep(10)
-            response = requests.post(
-                HF_INFERENCE_URL,
-                headers=headers,
-                data=image_bytes,
-                timeout=30,
-            )
-
-        if response.status_code != 200:
-            print(f"HF API error: {response.status_code} {response.text}")
+        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        results = client.image_classification(image, model=HF_MODEL_ID)
+        if not results:
             return None, 0.0
-
-        results = response.json()
-        if not results or not isinstance(results, list):
-            return None, 0.0
-
         top = results[0]
-        return top["label"], float(top["score"])
+        return top.label, float(top.score)
 
     except Exception as e:
         print(f"❌ HF Inference API error: {e}")
